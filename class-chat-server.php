@@ -3,91 +3,123 @@ class ChatServer
 {
     const ADDRESS = '127.0.0.1';
     const PORT = 8080;
-    const BYTE_LEN = 1024;
-    private Socket $sock;
+    const BYTE_SIZE = 1024;
+    const WELCOME_MSG = "WELCOME enter your name:";
+    private Socket $master_socket;
     private array $clients = [];
-    private array $cp_clients = [];
-    private array $recv_msgs = [];
+    private array $sockets = [];
+    private bool $kill = false;
     function __construct()
     {
-        $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-        if (! socket_bind($this->sock, self::ADDRESS, self::PORT)) {
+        $this->master_socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        if (! socket_bind($this->master_socket, self::ADDRESS, self::PORT)) {
             exit;
         }
-        if (! socket_listen($this->sock, 10)) {
+        if (! socket_listen($this->master_socket, 10)) {
             exit;
         }
-        if (! socket_set_option($this->sock, SOL_SOCKET, SO_REUSEADDR, 1)) {
+        if (! socket_set_option($this->master_socket, SOL_SOCKET, SO_REUSEADDR, 1)) {
             exit;
         }
-        if (! socket_set_nonblock($this->sock)) {
+        if (! socket_set_nonblock($this->master_socket)) {
             exit;
         }
     }
+
     function start()
     {
-        $stop = false;
-        while ($stop == false) {
+        while ($this->kill === false) {
             $this->update();
         }
     }
+
     private function update()
     {
         $this->allowNewConnection();
-        if ($this->isNoneConnection()) return;
-        $d = $this->monitorSocketsRead();
-        if ($d) {
+        if (! $this->clients) {
+            return;
+        }
+        $this->setSockets();
+        if ($this->isNewMsg()) {
             $this->chatUpdate();
         }
-        $this->recv_msgs = [];
+
+        #ソケットの破棄、変数の初期化など　未実装
+        $this->sockets = [];
+        #sleep(1);
     }
-    private function chatUpdate()
-    {
-        $this->recvMsg();
-        foreach($this->recv_msgs as $m) {
-            if ($m != "\x0a") {
-                echo $m;
-            }
-        }
-        foreach($this->recv_msgs as $msg) {
-            if ($msg == "\x0a") {
-                continue;
-            }
-            foreach($this->clients as $client) {
-                foreach($this->cp_clients as $sender) {
-                    if ($sender != $client) {
-                        socket_send($client, $msg, self::BYTE_LEN, 0);
-                    }
-                }
-            }
-        }
-    }
+
     private function allowNewConnection()
     {
-        if ($client = socket_accept($this->sock)) {
-            // socket_set_nonblock($client);
+        if ($new_socket = socket_accept($this->master_socket)) {
+            echo "created new connection\n";
+            $welcome_msg = "WELCOME ENTER YOUR NAME:";
+            $client['socket'] = $new_socket;
+            $client['name'] = null;
+            socket_send($client['socket'], $welcome_msg, self::BYTE_SIZE, 0);
             $this->clients[] = $client;
-            echo "NEW USER CONNECTED";
         }
     }
-    private function isNoneConnection(): bool
+
+    private function setSockets()
     {
-        return ! (bool)$this->clients;
+        foreach($this->clients as $client) {
+            $this->sockets[] = $client['socket'];
+        }
     }
-    private function monitorSocketsRead()
+
+    private function isNewMsg()
     {
-        $this->cp_clients = $this->clients;
         $null = null;
-        return socket_select($this->cp_clients, $null, $null, null);
+        $readable_socket_cnt = socket_select($this->sockets, $null, $null, 0);
+        return $readable_socket_cnt;
     }
-    private function recvMsg()
+
+    private function chatUpdate()
     {
-        foreach($this->cp_clients as $client) {
+        $readable_sockets_idx = array_keys($this->sockets);
+        foreach($readable_sockets_idx as $idx) {
             $recv_msg = null;
-            socket_recv($client, $recv_msg, self::BYTE_LEN, 0);
-            if ($recv_msg != null) {
-                $this->recv_msgs[] = $recv_msg;
+            socket_recv($this->clients[$idx]['socket'], $recv_msg, self::BYTE_SIZE, 0);
+            if (! $this->doesClientHaveName($this->clients[$idx])) {
+                $this->setClientName($idx, $recv_msg);
+                continue;
             }
+            #echo "name is set\n";
+            $this->sendMsg($idx, $recv_msg);
         }
+    }
+
+    private function doesClientHaveName($client): bool
+    {
+        if ($client['name'] === null) {
+            return false;
+        }
+        return true;
+    }
+
+    private function setClientName(int $idx, ?string $recv_msg)
+    {
+        $pos = stripos($recv_msg, ":");
+        if ($pos) {
+            $name = substr($recv_msg, $pos + 1);
+            $this->clients[$idx]['name'] = $name;
+        } else {
+            $this->clients[$idx]['name'] = "SET_NAME_FAILED";
+        }
+        echo "{$this->clients[$idx]['name']} has joined\n";
+    }
+
+    private function sendMsg(int $idx, ?string $recv_msg)
+    {
+        #sys/kill未実装socket閉じろ
+        foreach($this->clients as $client) {
+            if ($client['socket'] === $this->clients[$idx]['socket']) {
+                continue;
+            }
+            $sender_name = $this->clients[$idx]['name'];
+            socket_send($client['socket'], $sender_name . ": " . $recv_msg, self::BYTE_SIZE, 0);
+        }
+        echo "$recv_msg\n";
     }
 }

@@ -4,7 +4,7 @@ class ChatClient{
     const PORT = 8080;
     const BYTE_SIZE = 1024;
     private Socket $socket;
-    private bool $is_name_set = false;
+    private array $cp_socket = [];
     private bool $kill = false;
     
     function __construct()
@@ -20,58 +20,63 @@ class ChatClient{
 
     function start()
     {
+        if (! $this->connectToServer()) {
+            return;
+        }
         while ($this->kill === false) {
             $this->update();
-            sleep(1);
+            usleep(5000);
         }
-        socket_close($this->socket);
+    }
+
+    private function connectToServer()
+    {
+        if (! socket_connect($this->socket, self::ADDRESS,self::PORT)) {
+            echo "サーバーとの接続に失敗しました\n";
+            return false;
+        }
+        echo "サーバーとの接続に成功しました\n";
+        return true;
     }
 
     private function update()
     {
-        if (! $this->is_name_set) {
-            $this->connectToServerAndSetName();
-        }
-        $input = null;
-        $input = substr(fgets(STDIN), 0, -1);
-        if (strlen($input) != 0) {
-            if ($input == "sys/kill") {
-                $this->kill = true;
-            }
-            socket_send($this->socket, $input, self::BYTE_SIZE, 0);
-        }
         $this->chatUpdate();
-    }
-
-    private function connectToServerAndSetName()
-    {
-        if (! socket_connect($this->socket, self::ADDRESS, self::PORT)) {
-            exit();
-        }
-        $null = null;
-        $welcome_msg = null;
-        socket_recv($this->socket, $welcome_msg, self::BYTE_SIZE, 0);
-        echo "$welcome_msg\n";
-        while (! $this->is_name_set) {
-            $msg = "sys/set/name:";
-            $name = substr(fgets(STDIN), 0, -1);
-            if (strlen($name) != 0) {
-                socket_send($this->socket, $msg .= $name, self::BYTE_SIZE, 0);
-                $this->is_name_set = true;
-            }
-            $this->chatUpdate();
-        }
     }
 
     private function chatUpdate()
     {
-        $cp_socket[] = $this->socket;
-        $null = null;
-        $readable = socket_select($cp_socket, $null, $null, 0);
-        if ($readable) {
-            $recv_msg = null;
-            socket_recv($this->socket, $recv_msg, self::BYTE_SIZE, 0);
-            echo "$recv_msg\n";
+        $this->recvMsg();
+        $input = fgets(STDIN);
+        if ($input) {
+            $this->sendMsg(substr($input, 0, -1));
         }
+    }
+
+    private function recvMsg()
+    {
+        $this->setCpSocket();
+        $null = null;
+        if (! socket_select($this->cp_socket, $null, $null, 0)) {
+            return;
+        }
+        $recv_msg = null;
+        socket_recv($this->socket, $recv_msg, self::BYTE_SIZE, 0);
+        echo "$recv_msg\n";
+        $this->clearCpSocket();
+    }
+
+    private function sendMsg(string $msg)
+    {
+        socket_send($this->socket, $msg, self::BYTE_SIZE, 0);
+    }
+    private function setCpSocket()
+    {
+        $this->cp_socket[] = $this->socket;
+    }
+
+    private function clearCpSocket()
+    {
+        $this->cp_socket = [];
     }
 }
